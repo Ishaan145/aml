@@ -1,0 +1,20 @@
+# local data and run artefacts
+dataset/
+student_resource/
+work/
+work_gpu/
+ce_model/
+*.log
+
+# python / notebooks
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -58,3 +58,77 @@ raw TSVs → normalize (anyascii transliteration, mined equivalences, postcode, 
 ```
 
 ---
+
+## 3. Candidate Generation (Blocking)
+
+**Blocking keys and views**, all computed per country; country is never used as a model feature:
+
+| View | What it indexes | Recall alone (train probe) |
+|---|---|---|
+| Forward word-token IDF | name + address + postcode; field weights 1.0 / 0.6 / 1.2; cosine top-20 per S1 | 80.8% |
+| Reverse retrieval | every S2/S3 record → its top-5 S1s | 94.1% |
+| Exact keys | sorted name core; name + postcode; postcode + name prefix; postcode + house number; house number + first two address words (± name prefix); house number + two rarest address words | 70.0% |
+| **Union** | reciprocal rank fusion, capped at 40 per S1; very specific key hits and top-2 reverse hits always kept | **95.8%** |
+
+**Scaling measures.**
+- Sparse matrix top-k retrieval (`sparse_dot_topn`).
+- Cost-budgeted block purging: tokens in more than 20,000 pool records are dropped, and the cut-off tightens automatically if the estimated postings per query exceed a budget.
+- Exact keys are stored as 64-bit hashes.
+- Queries are processed in chunks with progress logs.
+- Full train and test blocking took about 2.6 hours on a 4-core laptop.
+
+**Supervised pruning.** The last filtering stage is a LightGBM model trained with cross-fitting grouped by S1 entity. Its features are blocking scores, fast string similarities and competition features. Its cut-off keeps 99.8% of blocked true pairs, with at most 20 candidates per S1.
+
+**Test candidate pairs generated:** **10,861,533**.
+- 6.27 candidates per S1 entity on average (95th percentile: 11).
+- 2,808 S1 entities with zero candidates.
+- Reduction ratio against all same-country pairs: **0.99999838**.
+
+**How true matches were not lost.**
+- The views fail in different ways: the forward view misses on look-alikes, the reverse view on sparse records, and the keys on typos. Their union covers each view's gaps.
+- Every change was checked with the `probe` stage (5% of train S1s against the full pool) and the `miss_report` diagnostic.
+- Final pair completeness on validation is **95.6%** after pruning.
+
+---
+
+## 4. Matching Model
+
+**Features used.**
+
+*Name*
+- rapidfuzz ratio, token-sort, token-set and partial ratios, and Jaro-Winkler, on the normalized name and on the "name core" (generic tokens removed).
+- Token Jaccard, exact and core equality, acronym match, symmetric-difference size.
+- IDF-weighted overlap (shared IDF mass, Jaccard, coverage of each side, and the IDF of the rarest word present on only one side), using per-country IDF.
+
+*Address*
+- The same string and IDF-overlap measures.
+- House number equal, different or missing; numeric-token Jaccard and counts; postcode and 3-digit postcode-prefix agreement.
+
+*Transformer cross-encoder*
+- Match logit of the fine-tuned `multilingual-e5-small` on raw "name | address" pairs.
+- Its rank, gap and second-best value among the S1's candidates.
+- Its rank and gap among the S1s competing for the same record, plus a mutual-best flag.
+
+*Other*
+- Blocking scores and ranks, key bits and block size, and reverse-view rank and gap.
+- Pruner probability and its within-S1 context.
+- Name frequency among S1 and pool records, which flags chains and franchises.
+- Source (S2 or S3).
+
+**Cross-encoder training.**
+- 1.5M pairs (35.6% positive) mined with the forward view and keys from 200,000 train S1 entities that the matcher does not use.
+- 1 epoch, AdamW, learning rate 5e-5, max length 128, fp16, on 2×T4 GPUs in 48 minutes. Loss fell from 0.46 to 0.024.
+- It then scored all 17M matcher pairs (train and test) with one process per GPU.
+
+**Model type.**
+- LightGBM binary classifier: 127 leaves, learning rate 0.1, early stopping.
+- 2-fold cross-fitting grouped by S1 entity, then refit on all training rows.
+- The matcher trains on a looser candidate set than inference uses, to see more hard negatives.
+- Feature gain: cross-encoder 71%, within-S1 cross-encoder gap 15%, pruner probability 8%.
+
+**Threshold selection method.**
+- Isotonic calibration on out-of-fold predictions.
+- The expected-F0.5 set decoder and a global threshold, each with and without exclusivity, are scored by exact macro F0.5 over *all* validation S1 entities, singletons included. The best is chosen.
+- Chosen: expected-F0.5 decoder with exclusivity.
+
+---

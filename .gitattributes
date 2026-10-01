@@ -1,0 +1,2 @@
+# submission outputs are larger than GitHub's 100 MB file limit -> Git LFS
+output/*.tsv filter=lfs diff=lfs merge=lfs -text

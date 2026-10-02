@@ -132,3 +132,64 @@ raw TSVs → normalize (anyascii transliteration, mined equivalences, postcode, 
 - Chosen: expected-F0.5 decoder with exclusivity.
 
 ---
+
+## 5. Results & Error Analysis
+
+### 5.1 Scores
+
+Macro F0.5 on out-of-fold validation: ≈40% of train S1 entities (about 0.88M entities with 3,054,665 true pairs), all with US/India labels.
+
+| System | Validation macro F0.5 | US | India |
+|---|---|---|---|
+| First full pipeline (forward view + char n-grams + keys) | 0.937 | 0.951 | 0.916 |
+| + reverse view, Indic transliteration, `.com` splitting | 0.9708 | 0.9777 | 0.9604 |
+| + transformer cross-encoder features (**submitted**) | **0.9756** | **0.9818** | **0.9665** |
+
+| Submitted system, by component (validation) | Value |
+|---|---|
+| Singleton share / singleton accuracy | 5.59% / 0.9862 (0.9665 without the cross-encoder) |
+| Non-singleton F0.5 | 0.9750 |
+| Pair completeness after blocking / after pruning | 95.77% / 95.58% |
+| Chosen decoder | expected-F0.5, with S2/S3 exclusivity |
+
+**Leaderboard (portal) score of the submitted file: 0.969415.**
+
+### 5.2 Validation vs leaderboard: why 0.9756 became 0.9694
+
+The portal score is 0.0062 lower than our validation score. The test set has no labels, so the split below
+is partly measured and partly estimated. Each line says which.
+
+| Cause | Effect on the gap | Status |
+|---|---|---|
+| **Different country mix.** Test S1 is 46.8% India, 38.3% US and 15.0% France. Validation is 40.0% India, 60.0% US, 0% France. India scores lower than US (0.966 vs 0.982), so more India weight lowers the average. | Re-weighting our own per-country validation scores to the test's US/India mix gives 0.9733, i.e. **−0.0023** | **Measured** from our validation numbers |
+| **France is unseen.** 259,452 test S1 entities (15.0%) come from a country with no training labels. Nothing in validation measures them. | If US and India generalise exactly as validated, the portal score implies France F0.5 ≈ **0.947**, i.e. roughly **−0.0039** | **Estimate**: it assumes zero drop on US/India, so the real France score may be higher |
+| **Denser test pool.** 5.75 S2/S3 records per S1 in test vs 4.68 in train, and 6.27 vs 5.13 candidates per S1 after pruning. More look-alike candidates give more chances for a false merge. | Not separable from the France term | **Plausible**, not measured |
+| **Optimism in validation.** (a) The decoder and its threshold were chosen on the same out-of-fold predictions they are scored on. (b) About 3% of the matcher's training entities overlap the cross-encoder's training entities (we used a 30% exclusion sample for the cross-encoder and a 40% sample for the matcher). | Small; it inflates validation only | **Known**, size not measured |
+| **Public leaderboard is a subset of the test set.** | Sampling noise only. With hundreds of thousands of entities this is far below 0.006. | Known |
+
+**Takeaway:** about a third of the gap (0.0023) is explained by country mix alone, and our own numbers
+measure that part. Most of the rest is consistent with lower accuracy on the unseen French data. Possible
+improvements: a France-specific error analysis (for example "R." vs "Rue", "Bd" vs "Boulevard",
+SARL/SAS/EURL suffix handling), and validation that reproduces the test's country mix and pool density.
+
+### 5.3 Error analysis
+
+- **Remaining recall loss is mostly in blocking.** 4.2% of true train pairs never become candidates.
+  Even with a perfect matcher, this alone caps F0.5 at about 0.99.
+- **Common false positives (wrong merges):**
+  - branches of the same chain on the same street;
+  - different businesses at one address with generic names ("Health Coalition", "Vision Group").
+- **Common false negatives (missed matches):**
+  - records with an empty address plus a trade or website name (`highcom` vs "High Group");
+  - Indic-script names whose transliteration diverges strongly (`piraivet limitet`);
+  - S1 entities with 6 or more matches, where look-alike records crowd the candidate list.
+- **Blocking misses on the first full run** (370,571 pairs, 12.1%), from our `miss_report` tool:
+  - 91% were *ranked out*: shared informative words, but outranked by look-alikes (fixed by the reverse view);
+  - 9% shared only very common words, mostly Indic-script names (fixed by transliteration);
+  - 0.04% shared no word at all.
+
+## 6. Conclusion
+
+Diagnosing *why* true pairs were missed, rather than tuning blindly, drove every gain: reverse retrieval and script-aware normalization lifted completeness from 87.9% to 95.8%. A small multilingual cross-encoder, used as listwise features inside a gradient-boosted matcher, added a further 0.005 on validation. On the hidden test set the system scores 0.9694. The 0.006 drop is largely explained by the test's heavier India share and its unseen French data, which points to France-specific normalization as the next improvement. Everything runs on the provided data alone, with permissively licensed models of at most 118M parameters.
+
+---

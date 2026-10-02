@@ -90,3 +90,11 @@ python utils/validate_submission.py --matching <path>/output/matching_results.ts
 
 Every stage caches its output in `work/`, so any stage can be re-run alone. Without `ce_train.parquet` and
 `ce_test.parquet` in `work/`, `match` produces the CPU-only baseline.
+
+## Diagnostics
+
+```bash
+python src/eda_check.py --data-dir $DATA                                          # data facts
+python -m src.pipeline --data-dir $DATA --stages probe --probe-frac 0.05          # blocking recall per view
+python -m src.miss_report --work work                                             # why true pairs are missed
+```

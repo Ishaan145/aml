@@ -193,3 +193,50 @@ SARL/SAS/EURL suffix handling), and validation that reproduces the test's countr
 Diagnosing *why* true pairs were missed, rather than tuning blindly, drove every gain: reverse retrieval and script-aware normalization lifted completeness from 87.9% to 95.8%. A small multilingual cross-encoder, used as listwise features inside a gradient-boosted matcher, added a further 0.005 on validation. On the hidden test set the system scores 0.9694. The 0.006 drop is largely explained by the test's heavier India share and its unseen French data, which points to France-specific normalization as the next improvement. Everything runs on the provided data alone, with permissively licensed models of at most 118M parameters.
 
 ---
+
+## Appendix
+
+### A. Code Artefacts
+
+`code/business_entity_resolution/`
+- `src/pipeline.py` is the entry point, with stages `prep`, `probe`, `block`, `prune` and `match`.
+
+| Module | What it does |
+|---|---|
+| `io_utils` | robust TSV reading |
+| `normalize` | normalization, transliteration, mined equivalences |
+| `blocking` | forward, reverse and key views, fusion |
+| `features` | pair and context features |
+| `models` | cross-fitted LightGBM |
+| `decode` | calibration, exclusivity, expected-F0.5 decoder |
+| `metric` | exact macro F0.5 |
+| `ce_model` | cross-encoder: mine, train, score |
+| `export_pairs` | exports candidate pairs for the GPU machine |
+| `eda_check`, `miss_report`, `diagnose` | analysis tools |
+
+**Reproduction** (see `README.md` for exact commands):
+```bash
+python -m src.pipeline --data-dir $DATA --work work --stages prep,block,prune,match --train-frac 0.4 --set n_jobs=4
+python -m src.pipeline --data-dir $DATA --work work_gpu --stages prep                                   # GPU machine
+python -m src.ce_model mine  --data-dir $DATA --work work_gpu --matcher-train-frac 0.3 --n-s1 200000 --topk 8
+python -m src.ce_model train --data-dir $DATA --pairs work_gpu/ce_mine_pairs.parquet --model-out ce_model
+python -m src.export_pairs --work work --out ce_export
+python -m src.ce_model score --data-dir $DATA --split test  --pairs ce_export/pairs_test.parquet  --align ce_export/align.json --model-dir ce_model --out work/ce_test.parquet
+python -m src.ce_model score --data-dir $DATA --split train --pairs ce_export/pairs_train.parquet --align ce_export/align.json --model-dir ce_model --out work/ce_train.parquet
+python -m src.pipeline --data-dir $DATA --work work --stages match --set n_jobs=4   # -> ../../output/matching_results.tsv
+```
+The Kaggle notebook used for the GPU steps is included as `notebooks/amazon_ml_2026_ce_kaggle.ipynb`.
+
+### B. Additional Results
+
+- **Decision table (with cross-encoder):**
+
+  | Decoder | Exclusivity | Macro F0.5 |
+  |---|---|---|
+  | expected-F0.5 | on | 0.97563 |
+  | expected-F0.5 | off | 0.97561 |
+  | threshold 0.69 | on | 0.97547 |
+  | threshold 0.69 | off | 0.97546 |
+
+- **Blocking progression:** 87.9% pair completeness (forward view + keys + char n-grams) → 95.8% (forward view + reverse view + keys, with transliteration).
+- **Pruner:** 765 rounds. Most important features: record-side RRF rank (0.44), record-side RRF gap (0.22), address token-set ratio (0.14).

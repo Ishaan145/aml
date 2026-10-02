@@ -79,3 +79,14 @@ python -m src.pipeline --data-dir $DATA --work work --stages match --set n_jobs=
 python utils/validate_submission.py --matching <path>/output/matching_results.tsv \
        --candidate <path>/output/candidate_pairs.tsv --test-dir dataset/test
 ```
+
+**What each flag does**
+- `--train-frac 0.4`: the share of train S1 entities used to train and validate the pruner and matcher.
+  Blocking always queries every S1, so competition features are computed the same way on train and test.
+- `--matcher-train-frac 0.3`: the cross-encoder is mined from S1s outside a 30% sample drawn with the same
+  seed, to keep it apart from the matcher's entities. The submitted run used 0.3 here and 0.4 for the
+  matcher, which leaves an overlap of about 3% of the matcher's entities (documented in the methodology).
+  Use the same value in both places for a leakage-free rerun.
+
+Every stage caches its output in `work/`, so any stage can be re-run alone. Without `ce_train.parquet` and
+`ce_test.parquet` in `work/`, `match` produces the CPU-only baseline.
